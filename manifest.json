@@ -40,6 +40,5 @@
       "32": "icons/icon32.png"
     },
     "default_title": "钓鱼网站检测"
-  },
-  "options_page": "options/options.html"
+  }
 }
