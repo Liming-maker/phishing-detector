@@ -36,6 +36,7 @@ function sendMsg(type, data = {}) {
 
 // 填充安全状态特征面板
 function renderFeatureList(feature) {
+  // render渲染
   const list = $('#featureList');
   list.innerHTML = '';
   const data = [

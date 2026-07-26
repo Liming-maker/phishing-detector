@@ -40,5 +40,9 @@
       "32": "icons/icon32.png"
     },
     "default_title": "钓鱼网站检测"
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
   }
 }
