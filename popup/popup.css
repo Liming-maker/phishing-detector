@@ -201,3 +201,32 @@ body {
   margin-bottom: 20px;
   font-size: 14px;
 }
+
+/* 数据来源徽章（本地诊断 / 云端检测） */
+.source-badge {
+  display: block;
+  width: fit-content;
+  padding: 3px 10px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  margin: 4px auto 8px;
+  text-align: center;
+  line-height: 1.4;
+}
+
+.source-badge.mock {
+  background: #fff7e6;
+  color: #d46b08;
+  border: 1px solid #ffd591;
+}
+
+.source-badge.api {
+  background: #e6fffb;
+  color: #08979c;
+  border: 1px solid #87e8de;
+}
+
+.source-badge.hidden {
+  display: none;
+}

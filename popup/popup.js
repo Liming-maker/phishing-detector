@@ -50,6 +50,25 @@ function renderFeatureList(feature) {
   });
 }
 
+// 渲染数据来源徽章
+// source: 'api' 云端检测 | 'mock' 本地诊断 | 'cache' 缓存
+function renderSourceBadge(elId, source) {
+  const el = $('#' + elId);
+  if (!el) return;
+  if (source === 'mock') {
+    el.textContent = '🔍 本地诊断模式（后端未连接）';
+    el.className = 'source-badge mock';
+  } else if (source === 'api') {
+    el.textContent = '☁️ 云端检测';
+    el.className = 'source-badge api';
+  } else if (source === 'cache') {
+    el.textContent = '💾 缓存结果';
+    el.className = 'source-badge mock';
+  } else {
+    el.className = 'source-badge hidden';
+  }
+}
+
 // 触发检测流程
 async function startDetect() {
   try {
@@ -60,12 +79,15 @@ async function startDetect() {
     // 根据返回结果切换状态
     if (res.code === 200) {
       const data = res.data;
+      // 数据来源徽章：mock（本地诊断）/ api（云端检测）/ 缓存继承上一次来源
+      const source = res.source || res.fromCache && 'cache' || 'api';
       if (data.level === 'safe') {
         switchState('safe');
         $('#safePercent').textContent = `${Math.round((1 - data.score) * 100)}%`;
         $('#safeScore').textContent = data.score.toFixed(2);
         $('#safeDesc').textContent = data.desc;
         renderFeatureList(data.feature);
+        renderSourceBadge('safeSourceBadge', source);
       } else if (['low', 'mid', 'high'].includes(data.level)) {
         switchState('warning');
         const levelText = { low: '低风险', mid: '中风险', high: '高风险' }[data.level];
@@ -73,13 +95,20 @@ async function startDetect() {
         $('#warnPercent').textContent = `${Math.round(data.score * 100)}%`;
         $('#warnScore').textContent = data.score.toFixed(2);
         $('#warnDesc').textContent = data.desc;
+        renderSourceBadge('warnSourceBadge', source);
       }
     } else {
       throw new Error(res.msg || '检测接口异常');
     }
   } catch (err) {
     switchState('error');
-    $('#errorMsg').textContent = err.message;
+    // 网络错误/超时给出更友好的提示（fallback 机制生效后此分支极少触发）
+    const msg = err.message || '检测失败';
+    if (/Failed to fetch|NetworkError|网络请求失败|请求超时/i.test(msg)) {
+      $('#errorMsg').textContent = '检测流程异常，请稍后重试';
+    } else {
+      $('#errorMsg').textContent = msg;
+    }
   }
 }
 

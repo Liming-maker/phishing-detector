@@ -296,6 +296,137 @@ async function callDetectAPI(url, deviceId, pageInfo) {
 }
 
 /**
+ * 本地启发式检测（后端不可用时的 fallback）
+ * 基于 URL 特征 + 页面信息进行风险判断，不依赖任何后端服务
+ *
+ * 评分规则：
+ *   - 无 HTTPS 加密         +0.30
+ *   - IP 直连访问           +0.30
+ *   - URL 含 @ 符号         +0.20（钓鱼常用跳转欺骗）
+ *   - URL 长度 > 75         +0.15
+ *   - 子域名数量 > 3        +0.15
+ *   - 含可疑关键词          +0.25（login/verify/account/free/bank/wallet 等）
+ *   - 非 80/443 端口        +0.10
+ *   - 含登录表单 + 非 HTTPS  +0.30（极高危组合）
+ *   - 域名含可疑字符        +0.15（连字符过多、纯数字域名等）
+ *
+ * 等级划分：
+ *   score >= 0.70 → high（高风险）
+ *   score >= 0.40 → mid（中风险）
+ *   score >= 0.20 → low（低风险）
+ *   其他          → safe（安全）
+ *
+ * @param {string} url 待检测 URL
+ * @param {object} pageInfo 页面信息（可选，来自 content script）
+ * @returns {{ code:number, data:{ level:string, score:number, desc:string, feature:object, recordId:string } }}
+ */
+function mockDetectUrl(url, pageInfo) {
+  let score = 0;
+  const reasons = [];
+  const feature = computeUrlFeatures(url);
+
+  // 1. HTTPS 检查
+  if (!feature.isHttps) {
+    score += 0.30;
+    reasons.push('未使用 HTTPS 加密传输');
+  }
+
+  // 2. IP 直连检查
+  if (feature.isIp) {
+    score += 0.30;
+    reasons.push('使用 IP 直连访问（钓鱼常用手法）');
+  }
+
+  // 3. URL 含 @ 符号
+  if (url.includes('@')) {
+    score += 0.20;
+    reasons.push('URL 含 @ 符号（可能用于跳转欺骗）');
+  }
+
+  // 4. URL 长度
+  if (feature.urlLen > 75) {
+    score += 0.15;
+    reasons.push(`URL 过长（${feature.urlLen} 字符）`);
+  }
+
+  // 5. 子域名数量
+  if (feature.subDomainCount > 3) {
+    score += 0.15;
+    reasons.push(`子域名层级过多（${feature.subDomainCount} 层）`);
+  }
+
+  // 6. 可疑关键词检查
+  const SUSPICIOUS_KEYWORDS = [
+    'login', 'signin', 'sign-in', 'verify', 'verification',
+    'account', 'update', 'confirm', 'secure', 'security',
+    'free', 'gift', 'bonus', 'prize', 'winner',
+    'bank', 'paypal', 'alipay', 'wechat', 'apple', 'icloud',
+    'wallet', 'crypto', 'bitcoin', 'metamask'
+  ];
+  const lowerUrl = url.toLowerCase();
+  const matchedKeywords = SUSPICIOUS_KEYWORDS.filter(kw => lowerUrl.includes(kw));
+  if (matchedKeywords.length > 0) {
+    score += 0.25;
+    reasons.push(`URL 含可疑关键词：${matchedKeywords.join('、')}`);
+  }
+
+  // 7. 非标准端口
+  try {
+    const port = new URL(url).port;
+    if (port && !['80', '443'].includes(port)) {
+      score += 0.10;
+      reasons.push(`使用非标准端口：${port}`);
+    }
+  } catch (e) { /* 忽略解析失败 */ }
+
+  // 8. 登录表单 + 非 HTTPS 组合（极高危）
+  if (pageInfo?.forms?.hasLoginForm && !feature.isHttps) {
+    score += 0.30;
+    reasons.push('页面含登录表单且未加密，存在凭证窃取风险');
+  }
+
+  // 9. 域名可疑特征：连字符过多 / 纯数字域名
+  try {
+    const host = new URL(url).hostname;
+    const hyphenCount = (host.match(/-/g) || []).length;
+    if (hyphenCount >= 3) {
+      score += 0.15;
+      reasons.push(`域名含过多连字符（${hyphenCount} 个）`);
+    }
+    if (/^\d+\.\d+\.\d+\.\d+$/.test(host) === false && /^\d+$/.test(host.split('.')[0])) {
+      score += 0.10;
+      reasons.push('域名主体为纯数字');
+    }
+  } catch (e) { /* 忽略解析失败 */ }
+
+  // 限制总分
+  score = Math.min(score, 1);
+
+  // 等级判定
+  let level;
+  if (score >= 0.70) level = 'high';
+  else if (score >= 0.40) level = 'mid';
+  else if (score >= 0.20) level = 'low';
+  else level = 'safe';
+
+  // 拼接描述
+  const desc = reasons.length > 0
+    ? `【本地诊断】检测到 ${reasons.length} 项风险特征：${reasons.join('；')}。`
+    : '【本地诊断】未发现明显风险特征，网站相对安全。';
+
+  return {
+    code: 200,
+    data: {
+      level,
+      score,
+      desc,
+      feature,
+      recordId: 'local-' + Date.now()
+    }
+  };
+}
+
+/**
  * 从服务端拉取历史记录
  */
 async function fetchHistoryAPI(deviceId) {
@@ -503,7 +634,8 @@ const messageHandlers = {
       // 缓存命中：转换为 popup 期望格式
       const normalized = normalizeResultData(cacheEntryToResult(cachedEntry), url);
       await handleDetectResult(normalized, url);
-      return { code: 200, data: normalized, fromCache: 'local' };
+      // 透传缓存的 source 字段（mock/api），让 popup 正确显示数据来源
+      return { code: 200, data: normalized, fromCache: 'local', source: cachedEntry.source || 'cache' };
     }
 
     // 2. 再查服务端缓存
@@ -512,10 +644,10 @@ const messageHandlers = {
       if (serverCached) {
         const normalized = normalizeResultData(serverCached, url);
         // 存入本地 domain 缓存（自动规范化为 {recordId,riskLevel,riskScore,riskReason,cachedTime,feature?}）
-        await setLocalCache(url, normalized);
-        await addHistory({ url, ...normalized });
+        await setLocalCache(url, { ...normalized, source: 'api' });
+        await addHistory({ url, ...normalized, source: 'api' });
         await handleDetectResult(normalized, url);
-        return { code: 200, data: normalized, fromCache: 'server' };
+        return { code: 200, data: normalized, fromCache: 'server', source: 'api' };
       }
     } catch (e) {
       console.warn('[ServiceWorker] 服务端缓存查询失败，继续走检测接口', e.message);
@@ -532,19 +664,30 @@ const messageHandlers = {
       console.warn('[ServiceWorker] 获取页面信息失败，使用 URL 检测', e.message);
     }
 
-    // 4. 调用检测 API
-    const apiResponse = await callDetectAPI(url, deviceId, pageInfo);
+    // 4. 调用检测 API（失败时自动 fallback 到本地启发式检测）
+    let apiResponse;
+    let source = 'api';  // 数据来源标记：api（后端）| mock（本地诊断）
+    try {
+      apiResponse = await callDetectAPI(url, deviceId, pageInfo);
+    } catch (apiErr) {
+      // 后端不可用 → fallback 到本地启发式检测
+      console.warn('[ServiceWorker] 后端检测失败，降级到本地诊断:', apiErr.message);
+      apiResponse = mockDetectUrl(url, pageInfo);
+      source = 'mock';
+    }
     const rawData = apiResponse?.data || apiResponse;
     const normalized = normalizeResultData(rawData, url);
 
     // 5. 存本地 domain 缓存 + 历史记录
-    await setLocalCache(url, normalized);
-    await addHistory({ url, ...normalized });
+    // 注意：mock 模式下也写入缓存，避免同域名重复"假检测"消耗算力
+    // 缓存 TTL 仍为 24h；后端恢复后用户可手动"清除缓存"重新走真实检测
+    await setLocalCache(url, { ...normalized, source });
+    await addHistory({ url, ...normalized, source });
 
     // 6. 处理结果（Badge + 警告 + 通知）
     await handleDetectResult(normalized, url);
 
-    return { code: 200, data: normalized };
+    return { code: 200, data: normalized, source };
   },
 
   /**
