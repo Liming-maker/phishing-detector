@@ -83,7 +83,7 @@ async function startDetect() {
       const source = res.source || res.fromCache && 'cache' || 'api';
       if (data.level === 'safe') {
         switchState('safe');
-        $('#safePercent').textContent = `${Math.round((1 - data.score) * 100)}%`;
+        $('#safePercent').textContent = `${Math.round(data.score * 100)}%`;
         $('#safeScore').textContent = data.score.toFixed(2);
         $('#safeDesc').textContent = data.desc;
         renderFeatureList(data.feature);
